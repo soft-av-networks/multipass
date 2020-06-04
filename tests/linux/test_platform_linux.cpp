@@ -18,10 +18,14 @@
 #include "tests/fake_handle.h"
 #include "tests/mock_environment_helpers.h"
 #include "tests/mock_settings.h"
+#include "tests/stub_url_downloader.h"
 #include "tests/test_with_mocked_bin_path.h"
 
+#include <src/daemon/default_vm_image_vault.h>
 #include <src/platform/backends/libvirt/libvirt_virtual_machine_factory.h>
 #include <src/platform/backends/libvirt/libvirt_wrapper.h>
+#include <src/platform/backends/lxd/lxd_virtual_machine_factory.h>
+#include <src/platform/backends/lxd/lxd_vm_image_vault.h>
 #include <src/platform/backends/qemu/qemu_virtual_machine_factory.h>
 
 #include <multipass/constants.h>
@@ -148,6 +152,20 @@ struct PlatformLinux : public mpt::TestWithMockedBinPath
         EXPECT_NO_THROW(factory_ptr = mp::platform::vm_backend(backend_path););
 
         EXPECT_TRUE(dynamic_cast<VMFactoryType*>(factory_ptr.get()));
+    }
+
+    template <typename VMImageVaultType>
+    void aux_test_image_vault_factory(const QString& driver = QStringLiteral(""))
+    {
+        setup_driver_settings(driver);
+
+        mp::days days{0};
+        mpt::StubURLDownloader stub_url_downloader;
+
+        decltype(mp::platform::make_image_vault({}, nullptr, "", "", days)) factory_ptr;
+        EXPECT_NO_THROW(factory_ptr = mp::platform::make_image_vault({}, &stub_url_downloader, "", "", days));
+
+        EXPECT_TRUE(dynamic_cast<VMImageVaultType*>(factory_ptr.get()));
     }
 
     void with_minimally_mocked_libvirt(std::function<void()> test_contents)
@@ -303,6 +321,11 @@ TEST_F(PlatformLinux, test_libvirt_driver_produces_correct_factory)
     with_minimally_mocked_libvirt(test);
 }
 
+TEST_F(PlatformLinux, test_lxd_driver_produces_correct_factory)
+{
+    aux_test_driver_factory<mp::LXDVirtualMachineFactory>("lxd");
+}
+
 TEST_F(PlatformLinux, test_qemu_in_env_var_is_ignored)
 {
     mpt::SetEnvScope env(mp::driver_env_var, "QEMU");
@@ -314,6 +337,16 @@ TEST_F(PlatformLinux, test_libvirt_in_env_var_is_ignored)
 {
     mpt::SetEnvScope env(mp::driver_env_var, "LIBVIRT");
     aux_test_driver_factory<mp::QemuVirtualMachineFactory>("qemu");
+}
+
+TEST_F(PlatformLinux, test_default_driver_creates_default_image_vault)
+{
+    aux_test_image_vault_factory<mp::DefaultVMImageVault>();
+}
+
+TEST_F(PlatformLinux, test_lxd_driver_creates_lxd_image_vault)
+{
+    aux_test_image_vault_factory<mp::LXDVMImageVault>("lxd");
 }
 
 struct TestUnsupportedDrivers : public TestWithParam<QString>
