@@ -26,10 +26,9 @@
 #include "tests/stub_status_monitor.h"
 #include "tests/temp_dir.h"
 
-#include <multipass/logging/log.h>
+#include <multipass/exceptions/start_exception.h>
+#include <multipass/format.h>
 #include <multipass/memory_size.h>
-#include <multipass/platform.h>
-#include <multipass/version.h>
 #include <multipass/virtual_machine_description.h>
 
 #include <QString>
@@ -86,7 +85,7 @@ const std::vector<LXDInstanceStatusParamType> lxd_instance_status_suite_inputs{
     {mpt::vm_state_fully_running_data, mp::VirtualMachine::State::running}};
 } // namespace
 
-TEST_F(LXDBackend, creates_project_and_network_on_first_run)
+TEST_F(LXDBackend, creates_project_and_network_on_healthcheck)
 {
     bool project_created{false};
     bool profile_updated{false};
@@ -97,9 +96,16 @@ TEST_F(LXDBackend, creates_project_and_network_on_first_run)
             auto op = request.attribute(QNetworkRequest::CustomVerbAttribute).toString();
             auto url = request.url().toString();
 
-            if (op == "GET" && (url.contains("1.0/projects/multipass") || url.contains("1.0/networks/mpbr0")))
+            if (op == "GET")
             {
-                return new mpt::MockLocalSocketReply(mpt::not_found_data, QNetworkReply::ContentNotFoundError);
+                if ((url.contains("1.0/projects/multipass") || url.contains("1.0/networks/mpbr0")))
+                {
+                    return new mpt::MockLocalSocketReply(mpt::not_found_data, QNetworkReply::ContentNotFoundError);
+                }
+                else if (url.contains("1.0"))
+                {
+                    return new mpt::MockLocalSocketReply(mpt::lxd_server_info_data);
+                }
             }
             else if (op == "POST" || op == "PUT")
             {
@@ -124,9 +130,34 @@ TEST_F(LXDBackend, creates_project_and_network_on_first_run)
 
     mp::LXDVirtualMachineFactory backend{std::move(mock_network_access_manager), data_dir.path(), base_url};
 
+    backend.hypervisor_health_check();
+
     EXPECT_TRUE(project_created);
     EXPECT_TRUE(profile_updated);
     EXPECT_TRUE(network_created);
+}
+
+TEST_F(LXDBackend, factory_creates_valid_virtual_machine_ptr)
+{
+    mpt::StubVMStatusMonitor stub_monitor;
+
+    ON_CALL(*mock_network_access_manager.get(), createRequest(_, _, _)).WillByDefault([](auto, auto request, auto) {
+        auto op = request.attribute(QNetworkRequest::CustomVerbAttribute).toString();
+        auto url = request.url().toString();
+
+        if (op == "GET" && url.contains("1.0/virtual-machines/pied-piper-valley/state"))
+        {
+            return new mpt::MockLocalSocketReply(mpt::vm_state_fully_running_data);
+        }
+
+        return new mpt::MockLocalSocketReply(mpt::not_found_data, QNetworkReply::ContentNotFoundError);
+    });
+
+    mp::LXDVirtualMachineFactory backend{std::move(mock_network_access_manager), data_dir.path(), base_url};
+
+    auto machine = backend.create_virtual_machine(default_description, stub_monitor);
+
+    EXPECT_NE(nullptr, machine);
 }
 
 TEST_F(LXDBackend, creates_in_stopped_state)
@@ -145,6 +176,7 @@ TEST_F(LXDBackend, creates_in_stopped_state)
                 if (url.contains("1.0/operations/0020444c-2e4c-49d5-83ed-3275e3f6d005"))
                 {
                     vm_created = true;
+                    return new mpt::MockLocalSocketReply(mpt::create_vm_finished_data);
                 }
                 else if (vm_created && url.contains("1.0/virtual-machines/pied-piper-valley"))
                 {
@@ -308,6 +340,7 @@ TEST_F(LXDBackend, posts_expected_data_when_creating_instance)
                 if (url.contains("1.0/operations/0020444c-2e4c-49d5-83ed-3275e3f6d005"))
                 {
                     vm_created = true;
+                    return new mpt::MockLocalSocketReply(mpt::create_vm_finished_data);
                 }
                 else if (vm_created && url.contains("1.0/virtual-machines/pied-piper-valley"))
                 {
@@ -382,6 +415,7 @@ TEST_F(LXDBackend, posts_expected_data_including_disk_size_when_creating_instanc
                 if (url.contains("1.0/operations/0020444c-2e4c-49d5-83ed-3275e3f6d005"))
                 {
                     vm_created = true;
+                    return new mpt::MockLocalSocketReply(mpt::create_vm_finished_data);
                 }
                 else if (vm_created && url.contains("1.0/virtual-machines/pied-piper-valley"))
                 {
@@ -405,25 +439,6 @@ TEST_F(LXDBackend, posts_expected_data_including_disk_size_when_creating_instanc
 
 TEST_F(LXDBackend, prepare_source_image_does_not_modify)
 {
-    ON_CALL(*mock_network_access_manager.get(), createRequest(_, _, _)).WillByDefault([](auto, auto request, auto) {
-        auto op = request.attribute(QNetworkRequest::CustomVerbAttribute).toString();
-        auto url = request.url().toString();
-
-        if (op == "GET")
-        {
-            if (url.contains("1.0/projects/multipass"))
-            {
-                return new mpt::MockLocalSocketReply(mpt::project_info_data);
-            }
-            else if (url.contains("1.0/networks/mpbr0"))
-            {
-                return new mpt::MockLocalSocketReply(mpt::network_info_data);
-            }
-        }
-
-        return new mpt::MockLocalSocketReply(mpt::not_found_data, QNetworkReply::ContentNotFoundError);
-    });
-
     mp::LXDVirtualMachineFactory backend{std::move(mock_network_access_manager), data_dir.path(), base_url};
     const mp::VMImage original_image{
         "/path/to/image", "", "", "deadbeef", "http://foo.bar", "bin", "baz", "the past", {"fee", "fi", "fo", "fum"}};
@@ -439,6 +454,86 @@ TEST_F(LXDBackend, prepare_source_image_does_not_modify)
     EXPECT_EQ(source_image.current_release, original_image.current_release);
     EXPECT_EQ(source_image.release_date, original_image.release_date);
     EXPECT_EQ(source_image.aliases, original_image.aliases);
+}
+
+TEST_F(LXDBackend, returns_expected_backend_string)
+{
+    mp::LXDVirtualMachineFactory backend{std::move(mock_network_access_manager), data_dir.path(), base_url};
+
+    const QString backend_string{"lxd"};
+
+    EXPECT_EQ(backend.get_backend_version_string(), backend_string);
+}
+
+TEST_F(LXDBackend, unimplemented_functions_logs_trace_message)
+{
+    mp::LXDVirtualMachineFactory backend{std::move(mock_network_access_manager), data_dir.path(), base_url};
+
+    const std::string name{"foo"};
+
+    EXPECT_CALL(*logger, log(Eq(mpl::Level::trace), mpt::MockLogger::make_cstring_matcher(StrEq("lxd factory")),
+                             mpt::MockLogger::make_cstring_matcher(
+                                 StrEq(fmt::format("No resources to remove for \"{}\"", name)))));
+
+    EXPECT_CALL(*logger, log(Eq(mpl::Level::trace), mpt::MockLogger::make_cstring_matcher(StrEq("lxd factory")),
+                             mpt::MockLogger::make_cstring_matcher(StrEq("No driver preparation for instance image"))));
+
+    EXPECT_CALL(*logger, log(Eq(mpl::Level::trace), mpt::MockLogger::make_cstring_matcher(StrEq("lxd factory")),
+                             mpt::MockLogger::make_cstring_matcher(
+                                 StrEq(fmt::format("No driver configuration for \"{}\"", name)))));
+
+    mp::VMImage image;
+    YAML::Node node;
+
+    backend.remove_resources_for(name);
+    backend.prepare_instance_image(image, default_description);
+    backend.configure(name, node, node);
+}
+
+TEST_F(LXDBackend, image_fetch_type_returns_expected_type)
+{
+    mp::LXDVirtualMachineFactory backend{std::move(mock_network_access_manager), data_dir.path(), base_url};
+
+    EXPECT_EQ(backend.fetch_type(), mp::FetchType::ImageOnly);
+}
+
+TEST_F(LXDBackend, healthcheck_throws_when_untrusted)
+{
+    const QByteArray untrusted_data{"{"
+                                    "\"type\": \"sync\","
+                                    "\"status\": \"Success\","
+                                    "\"status_code\": 200,"
+                                    "\"operation\": \"\","
+                                    "\"error_code\": 0,"
+                                    "\"error\": \"\","
+                                    "\"metadata\": {"
+                                    "  \"config\": {},"
+                                    "  \"api_status\": \"stable\","
+                                    "  \"api_version\": \"1.0\","
+                                    "  \"auth\": \"untrusted\","
+                                    "  \"public\": false,"
+                                    "  \"auth_methods\": ["
+                                    "    \"tls\""
+                                    "    ]"
+                                    "  }"
+                                    "}\n"};
+
+    ON_CALL(*mock_network_access_manager.get(), createRequest(_, _, _))
+        .WillByDefault([&untrusted_data](auto, auto request, auto) {
+            auto op = request.attribute(QNetworkRequest::CustomVerbAttribute).toString();
+            auto url = request.url().toString();
+
+            if (op == "GET" && url.contains("1.0"))
+            {
+                return new mpt::MockLocalSocketReply(untrusted_data);
+            }
+
+            return new mpt::MockLocalSocketReply(mpt::not_found_data, QNetworkReply::ContentNotFoundError);
+        });
+
+    mp::LXDVirtualMachineFactory backend{std::move(mock_network_access_manager), data_dir.path(), base_url};
+
+    EXPECT_THROW(backend.hypervisor_health_check(), std::runtime_error);
 }
 
 TEST_F(LXDBackend, returns_expected_network_info)
@@ -511,9 +606,7 @@ TEST_F(LXDBackend, lxd_request_invalid_json_throws)
         return new mpt::MockLocalSocketReply(invalid_json);
     });
 
-    EXPECT_THROW(
-        mp::LXDVirtualMachineFactory backend(std::move(mock_network_access_manager), data_dir.path(), base_url),
-        std::runtime_error);
+    EXPECT_THROW(mp::lxd_request(mock_network_access_manager.get(), "GET", base_url), std::runtime_error);
 }
 
 TEST_F(LXDBackend, lxd_request_wrong_json_throws)
@@ -526,9 +619,7 @@ TEST_F(LXDBackend, lxd_request_wrong_json_throws)
         return new mpt::MockLocalSocketReply(invalid_json);
     });
 
-    EXPECT_THROW(
-        mp::LXDVirtualMachineFactory backend(std::move(mock_network_access_manager), data_dir.path(), base_url),
-        std::runtime_error);
+    EXPECT_THROW(mp::lxd_request(mock_network_access_manager.get(), "GET", base_url), std::runtime_error);
 }
 
 TEST_F(LXDBackend, suspend_while_stopped_keeps_same_state)
@@ -616,6 +707,27 @@ TEST_F(LXDBackend, start_while_running_does_nothing)
 
     EXPECT_EQ(machine.current_state(), mp::VirtualMachine::State::running);
     EXPECT_FALSE(put_called);
+}
+
+TEST_F(LXDBackend, ensure_vm_running_throws_when_stopped)
+{
+    mpt::StubVMStatusMonitor stub_monitor;
+
+    ON_CALL(*mock_network_access_manager.get(), createRequest(_, _, _)).WillByDefault([](auto, auto request, auto) {
+        auto op = request.attribute(QNetworkRequest::CustomVerbAttribute).toString();
+        auto url = request.url().toString();
+
+        if (op == "GET" && url.contains("1.0/virtual-machines/pied-piper-valley/state"))
+        {
+            return new mpt::MockLocalSocketReply(mpt::vm_state_stopped_data);
+        }
+
+        return new mpt::MockLocalSocketReply(mpt::not_found_data, QNetworkReply::ContentNotFoundError);
+    });
+
+    mp::LXDVirtualMachine machine{default_description, stub_monitor, mock_network_access_manager.get(), base_url};
+
+    EXPECT_THROW(machine.ensure_vm_is_running(), mp::StartException);
 }
 
 TEST_P(LXDInstanceStatusTestSuite, lxd_state_returns_expected_VirtualMachine_state)
