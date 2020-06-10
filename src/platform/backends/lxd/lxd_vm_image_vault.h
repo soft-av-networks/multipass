@@ -35,6 +35,8 @@ class LXDVMImageVault final : public VMImageVault
 {
 public:
     LXDVMImageVault(std::vector<VMImageHost*> image_host, const QUrl& base_url = lxd_socket_url);
+    LXDVMImageVault(NetworkAccessManager::UPtr manager, std::vector<VMImageHost*> image_host,
+                    const QUrl& base_url = lxd_socket_url);
 
     VMImage fetch_image(const FetchType& fetch_type, const Query& query, const PrepareAction& prepare,
                         const ProgressMonitor& monitor) override;
@@ -47,9 +49,9 @@ public:
 private:
     VMImageInfo info_for(const Query& query);
 
+    std::unique_ptr<NetworkAccessManager> manager;
     std::vector<VMImageHost*> image_hosts;
     const QUrl base_url;
-    std::unique_ptr<NetworkAccessManager> manager;
     std::unordered_map<std::string, VMImageHost*> remote_image_host_map;
 };
 } // namespace multipass

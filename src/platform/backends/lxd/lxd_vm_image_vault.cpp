@@ -55,8 +55,9 @@ auto parse_percent_as_int(const QString& progress_string)
 }
 } // namespace
 
-mp::LXDVMImageVault::LXDVMImageVault(std::vector<VMImageHost*> image_hosts, const QUrl& base_url)
-    : image_hosts{image_hosts}, base_url{base_url}, manager{std::make_unique<mp::NetworkAccessManager>()}
+mp::LXDVMImageVault::LXDVMImageVault(NetworkAccessManager::UPtr manager, std::vector<VMImageHost*> image_hosts,
+                                     const QUrl& base_url)
+    : manager{std::move(manager)}, image_hosts{image_hosts}, base_url{base_url}
 {
     for (const auto& image_host : image_hosts)
     {
@@ -70,6 +71,11 @@ mp::LXDVMImageVault::LXDVMImageVault(std::vector<VMImageHost*> image_hosts, cons
     }
 }
 
+mp::LXDVMImageVault::LXDVMImageVault(std::vector<VMImageHost*> image_hosts, const QUrl& base_url)
+    : LXDVMImageVault(std::make_unique<mp::NetworkAccessManager>(), image_hosts, base_url)
+{
+}
+
 mp::VMImage mp::LXDVMImageVault::fetch_image(const FetchType& fetch_type, const Query& query,
                                              const PrepareAction& prepare, const ProgressMonitor& monitor)
 {
@@ -78,7 +84,7 @@ mp::VMImage mp::LXDVMImageVault::fetch_image(const FetchType& fetch_type, const 
     {
         auto instance_info = lxd_request(
             manager.get(), "GET",
-            QUrl(QString("%1/virtual_machines/%2").arg(base_url.toString()).arg(QString::fromStdString(query.name))));
+            QUrl(QString("%1/virtual-machines/%2").arg(base_url.toString()).arg(QString::fromStdString(query.name))));
 
         auto id = instance_info["metadata"].toObject()["config"].toObject()["volatile.base_image"].toString();
 
@@ -99,6 +105,8 @@ mp::VMImage mp::LXDVMImageVault::fetch_image(const FetchType& fetch_type, const 
                 {
                     source_image.aliases.push_back(alias.toStdString());
                 }
+
+                return source_image;
             }
             catch (const std::exception&)
             {
@@ -111,8 +119,8 @@ mp::VMImage mp::LXDVMImageVault::fetch_image(const FetchType& fetch_type, const 
         // Instance doesn't exist so move on
     }
 
-    // TODO: Remove once we do support these types of images
-    if (query.query_type != Query::Type::Alias && !mp::platform::is_image_url_supported())
+    // TODO: Remove once we do support http & file based images
+    if (query.query_type != Query::Type::Alias)
         throw std::runtime_error(fmt::format("http and file based images are not supported"));
 
     const auto info = info_for(query);
@@ -225,11 +233,13 @@ bool mp::LXDVMImageVault::has_record_for(const std::string& name)
 
 void mp::LXDVMImageVault::prune_expired_images()
 {
+    mpl::log(mpl::Level::trace, category, "Pruning expired images not implemented");
 }
 
 void mp::LXDVMImageVault::update_images(const FetchType& fetch_type, const PrepareAction& prepare,
                                         const ProgressMonitor& monitor)
 {
+    mpl::log(mpl::Level::trace, category, "Updating images not implemented");
 }
 
 mp::VMImageInfo mp::LXDVMImageVault::info_for(const mp::Query& query)
