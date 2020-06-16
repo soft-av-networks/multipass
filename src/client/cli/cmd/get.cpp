@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019 Canonical, Ltd.
+ * Copyright (C) 2019-2020 Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -36,7 +36,12 @@ mp::ReturnCode cmd::Get::run(mp::ArgParser* parser)
     {
         try
         {
-            cout << qUtf8Printable(Settings::instance().get(key)) << "\n";
+            if (auto val = Settings::instance().get(key); val.isEmpty())
+                cout << "<empty>";
+            else
+                cout << qUtf8Printable(val);
+
+            cout << "\n";
         }
         catch (const SettingsException& e)
         {
