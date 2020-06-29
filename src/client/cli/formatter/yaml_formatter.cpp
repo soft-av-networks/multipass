@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018 Canonical, Ltd.
+ * Copyright (C) 2018-2020 Canonical, Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -124,6 +124,22 @@ std::string mp::YamlFormatter::format(const ListReply& reply) const
         instance_node["release"] = instance.current_release();
 
         list[instance.name()].push_back(instance_node);
+    }
+
+    return mpu::emit_yaml(list);
+}
+
+std::string mp::YamlFormatter::format(const ListNetworksReply& reply) const
+{
+    YAML::Node list;
+
+    for (const auto& interface : format::sorted(reply.interfaces()))
+    {
+        YAML::Node interface_node;
+        interface_node["type"] = interface.type();
+        interface_node["description"] = interface.description();
+
+        list[interface.name()].push_back(interface_node);
     }
 
     return mpu::emit_yaml(list);
