@@ -30,7 +30,6 @@
 #include <multipass/logging/log.h>
 #include <multipass/memory_size.h>
 #include <multipass/platform.h>
-#include <multipass/version.h>
 #include <multipass/virtual_machine_description.h>
 
 #include <QString>
